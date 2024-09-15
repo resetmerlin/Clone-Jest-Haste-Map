@@ -1,9 +1,9 @@
 {
   "compilerOptions": {
-    "target": "es2015",
+    "target": "es2021", // Change to 'es2021' or later
     "module": "commonjs",
-    "lib": ["es2015", "dom"],
-    "types": ["node"], // Add this line
+    "lib": ["es2021", "dom"], // Update lib to 'es2021' or later
+    "types": ["node"],
     "strict": true,
     "esModuleInterop": true,
     "outDir": "./build",
