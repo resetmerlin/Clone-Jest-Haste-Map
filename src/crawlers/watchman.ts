@@ -1,4 +1,5 @@
 import watchman = require("fb-watchman");
+import * as path from "path";
 
 type WatchmanRoots = Map<string, Array<string>>;
 
@@ -48,6 +49,13 @@ export async function watchmanCrawl(options: any) {
    */
   const defaultWatchExpression: Array<any> = ["allof", ["type", "f"]];
 
+  /**
+   * The primary purpose of a clock is to allow Watchman to efficiently monitor
+   * and detect changes to files and directories. When a client queries Watchman to check for changes,
+   * it uses the clock value to ask for all changes since that clock.
+   * This mechanism makes Watchman highly efficient in tracking filesystem changes
+   * without having to scan all files every time.
+   */
   const clocks = data.clocks;
   const client = new watchman.Client();
 
@@ -134,12 +142,61 @@ export async function watchmanCrawl(options: any) {
   async function queryWatchmanForDirs(rootProjectDirMappings: WatchmanRoots) {
     const results = new Map<string, WatchmanQueryResponse>();
 
-    let isRestarted = false;
+    let isFresh = false;
 
     await Promise.all(
       [...rootProjectDirMappings].map(async ([root, directoryFilters]) => {
         const expression = [...defaultWatchExpression];
         const glob = [];
+
+        if (directoryFilters.length > 0) {
+          expression.push([
+            "anyof",
+            ...directoryFilters.map((dir) => ["dirname", dir]),
+          ]);
+
+          for (const directory of directoryFilters) {
+            for (const extension of extensions) {
+              glob.push(`${directory}/**/*.${extension}`);
+            }
+          }
+        } else {
+          for (const extension of extensions) {
+            glob.push(`**/*.${extension}`);
+          }
+        }
+
+        // Jest is only going to store one type of clock; a string that
+        // represents a local clock. However, the Watchman crawler supports
+        // a second type of clock that can be written by automation outside of
+        // Jest, called an "scm query", which fetches changed files based on
+        // source control mergebases. The reason this is necessary is because
+        // local clocks are not portable across systems, but scm queries are.
+        // By using scm queries, we can create the haste map on a different
+        // system and import it, transforming the clock into a local clock.
+        const since = clocks.get(path.relative(rootDir, root));
+
+        /**
+         * Finds all files that were modified since the specified clockspec
+         * that match the optional list of patterns. If no patterns are specified, all modified files are returned.
+         * The primary purpose of using since is to optimize file system monitoring by avoiding redundant checks.
+         * It allows clients to query Watchman for only the changes that occurred after a previous query,
+         * rather than retrieving the entire state of the filesystem or all files.
+         */
+        const query =
+          since === undefined
+            ? // use the 'since' generator if we have a clock available
+              { expression, fields, glob, glob_includedotfiles: true }
+            : // Otherwise use the 'glob' filter
+              { expression, fields, since };
+
+        const response = await cmd<WatchmanQueryResponse>("query", root, query);
+
+        if ("warning" in response) {
+          console.warn("watchman warning", response.warning);
+        }
+
+        const isSourceControlQuery = typeof since!;
       })
     );
   }
@@ -148,7 +205,7 @@ export async function watchmanCrawl(options: any) {
   let removedFiles = new Map();
   const changedFiles = new Map();
   let results: Map<string, WatchmanQueryResponse>;
-  let isRestarted = false;
+  let isFresh = false;
 
   try {
     const watchmanRoots = await getWathmanRoots(roots);
