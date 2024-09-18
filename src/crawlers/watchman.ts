@@ -1,5 +1,6 @@
 import watchman = require("fb-watchman");
 import * as path from "path";
+import normalizePathSep from "../lib/normalizePathSep";
 
 type WatchmanRoots = Map<string, Array<string>>;
 
@@ -34,10 +35,73 @@ type WatchmanQueryResponse = {
   }>;
 };
 
-export async function watchmanCrawl(options: any) {
+type FileMetaData = [
+  id: string,
+  mtime: number,
+  size: number,
+  visited: 0 | 1,
+  dependencies: string,
+  sha1: string | null | undefined
+];
+type MockData = Map<string, string>;
+type ModuleMetaData = [path: string, type: number];
+type ModuleMapItem = { [platform: string]: ModuleMetaData };
+type ModuleMapData = Map<string, ModuleMapItem>;
+type WatchmanClockSpec = string | { scm: { "mergebase-with": string } };
+type WatchmanClocks = Map<string, WatchmanClockSpec>;
+type DuplicatesSet = Map<string, /* type */ number>;
+type DuplicatesIndex = Map<string, Map<string, DuplicatesSet>>;
+export type FileData = Map<string, FileMetaData>;
+
+export type InternalHasteMap = {
+  clocks: WatchmanClocks;
+  duplicates: DuplicatesIndex;
+  files: FileData;
+  map: ModuleMapData;
+  mocks: MockData;
+};
+
+export type CrawlerOptions = {
+  computeSha1: boolean;
+  data: InternalHasteMap;
+  extensions: Array<string>;
+  rootDir: string;
+  roots: Array<string>;
+};
+
+const H = {
+  /* dependency serialization */
+  DEPENDENCY_DELIM: "\0",
+
+  /* file map attributes */
+  ID: 0,
+  MTIME: 1,
+  SIZE: 2,
+  VISITED: 3,
+  DEPENDENCIES: 4,
+  SHA1: 5,
+
+  /* module map attributes */
+  PATH: 0,
+  TYPE: 1,
+
+  /* module types */
+  MODULE: 0,
+  PACKAGE: 1,
+
+  /* platforms */
+  GENERIC_PLATFORM: "g",
+  NATIVE_PLATFORM: "native",
+};
+
+export async function watchmanCrawl(options: CrawlerOptions): Promise<{
+  changedFiles?: FileData;
+  removedFiles: FileData;
+  hasteMap: InternalHasteMap;
+}> {
   const fields = ["name", "exists", "mtime_ms", "size"];
 
-  const { data, extensions, ignore, rootDir, roots } = options;
+  const { data, extensions, rootDir, roots } = options;
 
   /**
    * This variable is used for the suffix-set
@@ -106,12 +170,17 @@ export async function watchmanCrawl(options: any) {
     );
 
   /**
-   * A bundler can have more than one root or entry point
+   * Based on the root that you provide, the watchman will watch the root and then
+   * retrieves hash map value of root dir and relative dir
    */
   async function getWathmanRoots(roots: Array<string>): Promise<WatchmanRoots> {
     const watchmanRootsHash = new Map();
     await Promise.all(
       roots.map(async (root) => {
+        /**
+         * If the root that you wanna watch is '/root-mock/fruits',
+         * watch '/root-mock' and get relative path which is fruits
+         */
         const response = await cmd<WatchmanWatchProjectResponse>(
           "watch-project",
           root
@@ -121,9 +190,9 @@ export async function watchmanCrawl(options: any) {
 
         // A root can only be filtered if it was never seen with a
         // relative_path before.
-        const areWeAlreadyWatchingRoot = !existing || existing.length > 0;
+        const areWeWatchingRootFirstTime = !existing || existing.length > 0;
 
-        if (areWeAlreadyWatchingRoot === true) {
+        if (areWeWatchingRootFirstTime === true) {
           if (response.relative_path) {
             watchmanRootsHash.set(response.watch, [
               ...(existing || []),
@@ -147,8 +216,13 @@ export async function watchmanCrawl(options: any) {
     await Promise.all(
       [...rootProjectDirMappings].map(async ([root, directoryFilters]) => {
         const expression = [...defaultWatchExpression];
+        /**
+         * This variable is to store glob pattern.
+         */
         const glob = [];
 
+        // If the root directory that you chose has child directory.
+        // example: '/root-mock/fruits'
         if (directoryFilters.length > 0) {
           expression.push([
             "anyof",
@@ -190,15 +264,38 @@ export async function watchmanCrawl(options: any) {
             : // Otherwise use the 'glob' filter
               { expression, fields, since };
 
+        /**
+         * A Watchman query is a command used to request information from the Watchman service about changes
+         * to files and directories that it is monitoring. Watchman, a tool developed by Facebook,
+         * watches files and directories for changes and sends notifications when those changes are detected.
+         * The query feature allows you to efficiently check for file changes, get lists of modified files,
+         * and perform other operations related to file and directory state.
+         */
         const response = await cmd<WatchmanQueryResponse>("query", root, query);
 
         if ("warning" in response) {
           console.warn("watchman warning", response.warning);
         }
 
-        const isSourceControlQuery = typeof since!;
+        // When a source-control query is used, we ignore the "is fresh"
+        // response from Watchman because it will be true despite the query
+        // being incremental.
+        const isSourceControlQuery =
+          typeof since !== "string" &&
+          since?.scm?.["mergebase-with"] !== undefined;
+
+        if (!isSourceControlQuery) {
+          isFresh = isFresh || response.is_fresh_instance;
+        }
+
+        results.set(root, response);
       })
     );
+
+    return {
+      isFresh,
+      results,
+    };
   }
 
   let files = data.files;
@@ -209,8 +306,111 @@ export async function watchmanCrawl(options: any) {
 
   try {
     const watchmanRoots = await getWathmanRoots(roots);
+    const watchmanFileResults = await queryWatchmanForDirs(watchmanRoots);
+
+    // Reset the file map if watchman was restarted and sends us a list of files
+    if (watchmanFileResults.isFresh) {
+      files = new Map();
+      removedFiles = new Map(data.files);
+      isFresh = true;
+    }
+
+    results = watchmanFileResults.results;
   } finally {
+    client.end();
   }
+
+  if (clientError) {
+    throw clientError;
+  }
+
+  for (const [watchRoot, response] of results) {
+    const fsRoot = normalizePathSep(watchRoot);
+    const relativeFsRoot = path.relative(rootDir, fsRoot);
+
+    clocks.set(
+      relativeFsRoot,
+      // Ensure we persist only the local clock if it is not string, it could be
+      // SCM query result. so get clock property of that object
+      typeof response.clock === "string" ? response.clock : response.clock.clock
+    );
+
+    for (const fileData of response.files) {
+      const filePath = fsRoot + path.sep + normalizePathSep(fileData.name);
+      const relativeFilePath = path.relative(rootDir, filePath);
+      const existingFileData = data.files.get(relativeFilePath);
+
+      // If watchman is fresh, the removed files map starts with all files
+      // and we remove them as we verify they still exist.
+      if (isFresh && existingFileData && fileData.exists) {
+        removedFiles.delete(relativeFilePath);
+      }
+
+      /**
+       * If the watched file data is somehow deleted
+       */
+      if (!fileData.exists) {
+        /**
+         * We don't have to act on the files that is deleted and were not tracked
+         */
+        if (existingFileData) {
+          files.delete(relativeFilePath);
+
+          /**
+           * If watchman is not refreshed, we have to know what file has been deleted
+           */
+          if (!isFresh) {
+            removedFiles.set(relativeFilePath, existingFileData);
+          }
+        }
+      } else if (filePath) {
+        const mtime =
+          typeof fileData.mtime_ms === "number"
+            ? fileData.mtime_ms
+            : fileData.mtime_ms.toNumber();
+
+        const size = fileData.size;
+
+        let sha1hex = fileData["content.sha1hex"];
+
+        if (typeof sha1hex !== "string" || sha1hex.length !== 40) {
+          sha1hex = undefined;
+        }
+
+        let nextData: FileMetaData;
+
+        if (existingFileData && existingFileData[H.MTIME] === mtime) {
+          nextData = existingFileData;
+        } else if (
+          existingFileData &&
+          sha1hex &&
+          existingFileData[H.SHA1] === sha1hex
+        ) {
+          nextData = [
+            existingFileData[0],
+            mtime,
+            existingFileData[2],
+            existingFileData[3],
+            existingFileData[4],
+            existingFileData[5],
+          ];
+        } else {
+          nextData = ["", mtime, size, 0, "", sha1hex ?? null];
+        }
+
+        files.set(relativeFilePath, nextData);
+        changedFiles.set(relativeFilePath, nextData);
+      }
+    }
+  }
+
+  data.files = files;
+
+  return {
+    changedFiles: isFresh ? undefined : changedFiles,
+    hasteMap: data,
+    removedFiles,
+  };
 }
 
 /**

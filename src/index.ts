@@ -4,8 +4,15 @@ import { createHash } from "crypto";
 import * as path from "path";
 import { deserialize, serialize } from "v8";
 import * as fs from "fs";
+import {
+  CrawlerOptions,
+  FileData,
+  InternalHasteMap,
+  watchmanCrawl,
+} from "./crawlers/watchman";
 
 type Options = {
+  computeSha1?: boolean;
   console?: Console;
   extensions: Array<string>;
   ignorePattern?: RegExp;
@@ -20,6 +27,7 @@ type Options = {
 };
 
 type InternalOptions = {
+  computeSha1: boolean;
   extensions: Array<string>;
   ignorePattern?: RegExp;
   maxWorkers: number;
@@ -50,6 +58,7 @@ class HasteMap extends EventEmitter {
   private constructor(options: Options) {
     super();
     this._options = {
+      computeSha1: options.computeSha1 || false,
       cacheDirectory: options.cacheDirectory || tmpdir(),
       extensions: options.extensions,
       maxWorkers: options.maxWorkers,
@@ -136,11 +145,45 @@ class HasteMap extends EventEmitter {
   build() {
     if (!this._buildPromise) {
       this._buildPromise = async () => {
-        const data = await this._buildPromise;
+        const data = await this._buildFileMap();
+
+        // Persist when we don't know if files changed (changedFiles undefined)
+        // or when we know a file was changed or deleted.
+        let hasteMap: InternalHasteMap;
+
+        if (
+          data.changedFiles === undefined ||
+          data.changedFiles.size > 0 ||
+          data.removedFiles.size > 0
+        ) {
+          hasteMap = await this._buildHasteMap(data);
+        }
       };
     }
   }
 
+  private _buildHasteMap(data: {
+    removedFiles: FileData;
+    changedFiles?: FileData;
+    hasteMap: InternalHasteMap;
+  }) {
+    const { removedFiles, changedFiles, hasteMap } = data;
+
+    // If any files were removed or we did not track what files changed, process
+    // every file looking for changes, Otherwise, process only changed files.
+    let map;
+    let mocks;
+    let filesToProcess;
+
+    if (changedFiles === undefined || removedFiles.size > 0) {
+      map = hasteMap.map;
+      mocks = hasteMap.mocks;
+      filesToProcess = changedFiles;
+    }
+  }
+  /**
+   * 2. crawl the file system.
+   */
   private async _buildFileMap() {
     let hasteMap;
     try {
@@ -153,12 +196,13 @@ class HasteMap extends EventEmitter {
     return this._crawl(hasteMap);
   }
 
-  private async _crawl(hasteMap: any) {
+  private async _crawl(hasteMap: InternalHasteMap) {
     const options = this._options;
 
     const crawl = watchmanCrawl;
 
-    const crawlerOptions = {
+    const crawlerOptions: CrawlerOptions = {
+      computeSha1: options.computeSha1,
       data: hasteMap,
       extensions: options.extensions,
       rootDir: options.rootDir,
