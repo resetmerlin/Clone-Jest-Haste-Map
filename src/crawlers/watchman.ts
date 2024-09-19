@@ -1,98 +1,17 @@
 import watchman = require("fb-watchman");
 import * as path from "path";
 import normalizePathSep from "../lib/normalizePathSep";
-
-type WatchmanRoots = Map<string, Array<string>>;
-
-type WatchmanCapabilityCheckResponse = {
-  // { 'suffix-set': true }
-  capabilities: Record<string, boolean>;
-  // '2021.06.07.00'
-  version: string;
-};
-
-type WatchmanWatchProjectResponse = {
-  watch: string;
-  relative_path: string;
-};
-
-type WatchmanQueryResponse = {
-  warning?: string;
-  is_fresh_instance: boolean;
-  version: string;
-  clock:
-    | string
-    | {
-        scm: { "mergebase-with": string; mergebase: string };
-        clock: string;
-      };
-  files: Array<{
-    name: string;
-    exists: boolean;
-    mtime_ms: number | { toNumber: () => number };
-    size: number;
-    "content.sha1hex"?: string;
-  }>;
-};
-
-type FileMetaData = [
-  id: string,
-  mtime: number,
-  size: number,
-  visited: 0 | 1,
-  dependencies: string,
-  sha1: string | null | undefined
-];
-type MockData = Map<string, string>;
-type ModuleMetaData = [path: string, type: number];
-type ModuleMapItem = { [platform: string]: ModuleMetaData };
-type ModuleMapData = Map<string, ModuleMapItem>;
-type WatchmanClockSpec = string | { scm: { "mergebase-with": string } };
-type WatchmanClocks = Map<string, WatchmanClockSpec>;
-type DuplicatesSet = Map<string, /* type */ number>;
-type DuplicatesIndex = Map<string, Map<string, DuplicatesSet>>;
-export type FileData = Map<string, FileMetaData>;
-
-export type InternalHasteMap = {
-  clocks: WatchmanClocks;
-  duplicates: DuplicatesIndex;
-  files: FileData;
-  map: ModuleMapData;
-  mocks: MockData;
-};
-
-export type CrawlerOptions = {
-  computeSha1: boolean;
-  data: InternalHasteMap;
-  extensions: Array<string>;
-  rootDir: string;
-  roots: Array<string>;
-};
-
-const H = {
-  /* dependency serialization */
-  DEPENDENCY_DELIM: "\0",
-
-  /* file map attributes */
-  ID: 0,
-  MTIME: 1,
-  SIZE: 2,
-  VISITED: 3,
-  DEPENDENCIES: 4,
-  SHA1: 5,
-
-  /* module map attributes */
-  PATH: 0,
-  TYPE: 1,
-
-  /* module types */
-  MODULE: 0,
-  PACKAGE: 1,
-
-  /* platforms */
-  GENERIC_PLATFORM: "g",
-  NATIVE_PLATFORM: "native",
-};
+import {
+  CrawlerOptions,
+  FileData,
+  FileMetaData,
+  InternalHasteMap,
+  WatchmanCapabilityCheckResponse,
+  WatchmanQueryResponse,
+  WatchmanRoots,
+  WatchmanWatchProjectResponse,
+} from "../types";
+import { H } from "../constants";
 
 export async function watchmanCrawl(options: CrawlerOptions): Promise<{
   changedFiles?: FileData;

@@ -4,12 +4,8 @@ import { createHash } from "crypto";
 import * as path from "path";
 import { deserialize, serialize } from "v8";
 import * as fs from "fs";
-import {
-  CrawlerOptions,
-  FileData,
-  InternalHasteMap,
-  watchmanCrawl,
-} from "./crawlers/watchman";
+import { FileData, InternalHasteMap, ModuleMapItem } from "./types";
+import { H } from "./constants";
 
 type Options = {
   computeSha1?: boolean;
@@ -176,9 +172,16 @@ class HasteMap extends EventEmitter {
     let filesToProcess;
 
     if (changedFiles === undefined || removedFiles.size > 0) {
+      map = new Map();
+      mocks = new Map();
+      filesToProcess = hasteMap.files;
+    } else {
       map = hasteMap.map;
       mocks = hasteMap.mocks;
       filesToProcess = changedFiles;
+    }
+
+    for (const [relativeFilePath, fileMetadata] of removedFiles) {
     }
   }
   /**
@@ -243,6 +246,66 @@ class HasteMap extends EventEmitter {
     return hasteMap;
   }
 
+  /**
+   * This function should be called when the file under 'filePath' is removed
+   * or changed. When that happens, we want to figure out if that file was
+   * part of a group of files that had the same ID. If it was, we want to
+   * remove it from the group. Furthermore, if there is only one fle
+   * remaining in the group, then we want to restore that single file as the
+   * correct resolution for its ID, and cleanup the duplicates index.
+   *
+   */
+  private _recoverDuplicates(
+    hasteMap: InternalHasteMap,
+    relativeFilePath: string,
+    moduleName: string
+  ) {
+    let dupsByPlatform = hasteMap.duplicates.get(moduleName);
+    if (dupsByPlatform == null) {
+      return;
+    }
+
+    /**
+     * We don't consider platform extension like index.ios.js -> ios
+     */
+    const platform = H.GENERIC_PLATFORM;
+
+    let dups = dupsByPlatform.get(platform);
+
+    if (dups == null) {
+      return;
+    }
+
+    dupsByPlatform = new Map(dupsByPlatform);
+    hasteMap.duplicates.set(moduleName, dupsByPlatform);
+
+    dups = new Map(dups);
+    dupsByPlatform.set(platform, dups);
+    dups.delete(relativeFilePath);
+
+    if (dups.size !== 1) {
+      return;
+    }
+
+    const uniqueModule = dups.entries().next().value;
+
+    if (!uniqueModule) {
+      return;
+    }
+
+    let dedupMap = hasteMap.map.get(moduleName);
+
+    if (!dedupMap) {
+      dedupMap = Object.create(null) as ModuleMapItem;
+      hasteMap.map.set(moduleName, dedupMap);
+    }
+
+    dedupMap[platform] = uniqueModule;
+    dupsByPlatform.delete(platform);
+    if (dupsByPlatform.size === 0) {
+      hasteMap.duplicates.delete(moduleName);
+    }
+  }
   private _createEmptyMap() {
     return {
       clocks: new Map(),
