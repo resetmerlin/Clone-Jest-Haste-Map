@@ -64,3 +64,19 @@ export type CrawlerOptions = {
   rootDir: string;
   roots: Array<string>;
 };
+
+export type HType = {
+  ID: 0;
+  MTIME: 1;
+  SIZE: 2;
+  VISITED: 3;
+  DEPENDENCIES: 4;
+  SHA1: 5;
+  PATH: 0;
+  TYPE: 1;
+  MODULE: 0;
+  PACKAGE: 1;
+  GENERIC_PLATFORM: "g";
+  NATIVE_PLATFORM: "native";
+  DEPENDENCY_DELIM: "\0";
+};

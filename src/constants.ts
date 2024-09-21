@@ -1,4 +1,6 @@
-export const H = {
+import { HType } from "./types";
+
+export const H: HType = {
   /* dependency serialization */
   DEPENDENCY_DELIM: "\0",
 

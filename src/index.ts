@@ -182,6 +182,7 @@ class HasteMap extends EventEmitter {
     }
 
     for (const [relativeFilePath, fileMetadata] of removedFiles) {
+      this._recoverDuplicates(hasteMap, relativeFilePath, fileMetadata[H.ID]);
     }
   }
   /**
