@@ -4,7 +4,14 @@ import { createHash } from "crypto";
 import * as path from "path";
 import { deserialize, serialize } from "v8";
 import * as fs from "fs";
-import { FileData, InternalHasteMap, ModuleMapItem } from "./types";
+import {
+  FileData,
+  InternalHasteMap,
+  ModuleMapData,
+  ModuleMapItem,
+  ModuleMetaData,
+  WorkerMetadata,
+} from "./types";
 import { H } from "./constants";
 
 type Options = {
@@ -38,6 +45,9 @@ type InternalOptions = {
 };
 
 const VCS_DIRECTORIES = "/\\.git/|/\\.hg/|/\\.sl/";
+const PACKAGE_JSON = `${path.sep}package.json`;
+const NODE_MODULES = `${path.sep}node_modules${path.sep}`;
+type WorkerOptions = { forceInBand: boolean };
 
 class HasteMap extends EventEmitter {
   private readonly _options: InternalOptions;
@@ -169,7 +179,7 @@ class HasteMap extends EventEmitter {
     // every file looking for changes, Otherwise, process only changed files.
     let map;
     let mocks;
-    let filesToProcess;
+    let filesToProcess: FileData;
 
     if (changedFiles === undefined || removedFiles.size > 0) {
       map = new Map();
@@ -184,7 +194,32 @@ class HasteMap extends EventEmitter {
     for (const [relativeFilePath, fileMetadata] of removedFiles) {
       this._recoverDuplicates(hasteMap, relativeFilePath, fileMetadata[H.ID]);
     }
+
+    const promises: Array<Promise<void>> = [];
+    for (const relativeFilePath of filesToProcess.keys()) {
+      if (relativeFilePath.endsWith(PACKAGE_JSON)) {
+        continue;
+      }
+      // SHA-1, if requested, should already be present thanks to the crawler.
+      const filePath = path.resolve(this._options.rootDir, relativeFilePath);
+    }
   }
+
+  /**
+   * 1. read data from the cache or create an empty structure.
+   */
+  read() {
+    let hasteMap;
+
+    try {
+      hasteMap = deserialize(fs.readFileSync(this._cachePath));
+    } catch {
+      hasteMap = this._createEmptyMap();
+    }
+
+    return hasteMap;
+  }
+
   /**
    * 2. crawl the file system.
    */
@@ -198,6 +233,110 @@ class HasteMap extends EventEmitter {
     }
 
     return this._crawl(hasteMap);
+  }
+
+  /**
+   * 3. parse and extract metadata from changed files.
+   */
+  private _processFile(
+    hasteMap: InternalHasteMap,
+    map: ModuleMapData,
+    filePath: string,
+    workerOptions?: WorkerOptions
+  ) {
+    const rootDir = this._options.rootDir;
+
+    const setModule = (id: string, module: ModuleMetaData) => {
+      let moduleMap = map.get(id);
+
+      if (!moduleMap) {
+        moduleMap = Object.create(null) as ModuleMapItem;
+        map.set(id, moduleMap);
+      }
+
+      const platform = H.GENERIC_PLATFORM;
+
+      const existingModule = moduleMap[platform];
+
+      if (existingModule && existingModule[H.PATH] !== module[H.PATH]) {
+        this._console["warn"](
+          [
+            `jest-haste-map: Haste module naming collision: ${id}`,
+            " The following files share their name: please adjust your hasteImpl:",
+            `   *<rootDir>${path.sep}${existingModule[H.PATH]}`,
+            `   *<rootDIr>${path.sep}${module[H.PATH]}`,
+            "",
+          ].join("\n")
+        );
+
+        // We do NOT want consumers to use a module that is ambiguous.
+        delete moduleMap[platform];
+
+        if (Object.keys(moduleMap).length === 1) {
+          map.delete(id);
+        }
+
+        let dupsByPlatform = hasteMap.duplicates.get(id);
+
+        if (dupsByPlatform == null) {
+          dupsByPlatform = new Map();
+        }
+      }
+    };
+
+    const relativeFilePath = path.relative(rootDir, filePath);
+    const fileMetadata = hasteMap.files.get(relativeFilePath);
+
+    if (!fileMetadata) {
+      throw new Error(
+        "jest-haste-map: File to process was not found in the haste map."
+      );
+    }
+
+    const moduleMetadata = hasteMap.map.get(fileMetadata[H.ID]);
+
+    // Callback called when the response from the worker is successful.
+    const workerReply = (metadata: WorkerMetadata) => {
+      // '1' for truthy values instead of the 'true' to save cache space
+      fileMetadata[H.VISITED] = 1;
+
+      const metadataId = metadata.id;
+      const metadataModule = metadata.module;
+
+      if (metadataId && metadataModule) {
+        fileMetadata[H.ID] = metadataId;
+        setModule(metadataId, metadataModule);
+      }
+
+      fileMetadata[H.DEPENDENCIES] = metadata.dependencies
+        ? metadata.dependencies.join(H.DEPENDENCY_DELIM)
+        : "";
+
+      // We always compute SHA1
+      fileMetadata[H.SHA1] = metadata.sha1;
+    };
+
+    // Callback called when the response from the worker is an error.
+    const workerEror = (error: Error | any) => {
+      if (typeof error !== "object" || !error.message || !error.stack) {
+        error = new Error(error);
+        error.stack = ""; // Remove stack for stack-less errors
+      }
+
+      if (!["ENONET", "EACCES"].includes(error.code)) {
+        throw error;
+      }
+
+      // If a file cannot be read we remove it from the file list and
+      // ignore the failure silently
+      hasteMap.files.delete(relativeFilePath);
+    };
+
+    // If we retain all files in the virtual HasteFS respresentation, we avoid
+    // reading them if they aren't important (node_modules)
+    if (filePath.includes(NODE_MODULES)) {
+      return this, _getWo;
+    }
   }
 
   private async _crawl(hasteMap: InternalHasteMap) {
@@ -233,18 +372,11 @@ class HasteMap extends EventEmitter {
   }
 
   /**
-   * 1. read data from the cache or create an empty structure.
+   * Creates workers or parses files and extracts metadata in-process
    */
-  read() {
-    let hasteMap;
+  private _getWorker(options: WorkerOptions | undefined){
 
-    try {
-      hasteMap = deserialize(fs.readFileSync(this._cachePath));
-    } catch {
-      hasteMap = this._createEmptyMap();
-    }
-
-    return hasteMap;
+    if(this,_wor)
   }
 
   /**

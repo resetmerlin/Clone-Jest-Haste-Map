@@ -3,6 +3,7 @@
     "crypto": "^1.0.1",
     "events": "^3.3.0",
     "fb-watchman": "^2.0.2",
+    "graceful-fs": "^4.2.11",
     "jest-util": "^29.7.0",
     "os": "^0.1.2"
   },
@@ -24,6 +25,7 @@
     "@parcel/packager-ts": "2.12.0",
     "@parcel/transformer-typescript-types": "2.12.0",
     "@types/fb-watchman": "^2.0.4",
+    "@types/graceful-fs": "^4.1.9",
     "os-browserify": "^0.3.0",
     "parcel": "^2.12.0",
     "ts-node": "^10.9.2",

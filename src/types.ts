@@ -49,6 +49,13 @@ export type DuplicatesSet = Map<string, /* type */ number>;
 export type DuplicatesIndex = Map<string, Map<string, DuplicatesSet>>;
 export type FileData = Map<string, FileMetaData>;
 
+export type WorkerMetadata = {
+  dependencies: Array<string> | undefined | null;
+  id: string | undefined | null;
+  module: ModuleMetaData | undefined | null;
+  sha1: string | undefined | null;
+};
+
 export type InternalHasteMap = {
   clocks: WatchmanClocks;
   duplicates: DuplicatesIndex;
@@ -79,4 +86,27 @@ export type HType = {
   GENERIC_PLATFORM: "g";
   NATIVE_PLATFORM: "native";
   DEPENDENCY_DELIM: "\0";
+};
+
+export type HasteImpl = {
+  getHasteName(filePath: string): string | undefined;
+};
+
+export type WorkerMessage = {
+  computeDependencies: boolean;
+  computeSha1: boolean;
+  dependencyExtractor?: string | null;
+  rootDir: string;
+  filePath: string;
+  hasteImplModulePath?: string;
+  retainAllFiles?: boolean;
+};
+
+export type DependencyExtractor = {
+  extract: (
+    code: string,
+    filePath: string,
+    defaultExtract: DependencyExtractor["extract"]
+  ) => Iterable<string>;
+  getCacheKey?: () => string;
 };
