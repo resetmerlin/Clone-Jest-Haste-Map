@@ -5,6 +5,7 @@ import * as path from "path";
 import { deserialize, serialize } from "v8";
 import * as fs from "fs";
 import {
+  CrawlerOptions,
   FileData,
   InternalHasteMap,
   ModuleMapData,
@@ -13,6 +14,7 @@ import {
   WorkerMetadata,
 } from "./types";
 import { H } from "./constants";
+import { watchmanCrawl } from "./crawlers/watchman";
 
 type Options = {
   computeSha1?: boolean;
