@@ -66,7 +66,7 @@ class HasteMap extends EventEmitter {
   private constructor(options: Options) {
     super();
     this._options = {
-      computeSha1: options.computeSha1 || false,
+      computeSha1: true,
       cacheDirectory: options.cacheDirectory || tmpdir(),
       extensions: options.extensions,
       maxWorkers: options.maxWorkers,
@@ -376,10 +376,7 @@ class HasteMap extends EventEmitter {
   /**
    * Creates workers or parses files and extracts metadata in-process
    */
-  private _getWorker(options: WorkerOptions | undefined){
-
-    if(this,_wor)
-  }
+  private _getWorker(options: WorkerOptions | undefined) {}
 
   /**
    * This function should be called when the file under 'filePath' is removed
