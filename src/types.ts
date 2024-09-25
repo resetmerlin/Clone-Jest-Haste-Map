@@ -7,6 +7,10 @@ export type WatchmanCapabilityCheckResponse = {
   version: string;
 };
 
+export type WatchmanListCapabilitiesResponse = {
+  capabilities: Array<string>;
+};
+
 export type WatchmanWatchProjectResponse = {
   watch: string;
   relative_path: string;

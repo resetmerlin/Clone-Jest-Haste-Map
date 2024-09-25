@@ -7,6 +7,7 @@ import {
   FileMetaData,
   InternalHasteMap,
   WatchmanCapabilityCheckResponse,
+  WatchmanListCapabilitiesResponse,
   WatchmanQueryResponse,
   WatchmanRoots,
   WatchmanWatchProjectResponse,
@@ -88,6 +89,20 @@ export async function watchmanCrawl(options: CrawlerOptions): Promise<{
       })
     );
 
+  if (options.computeSha1) {
+    /**
+     * This command returns the full list of supported capabilities offered by the watchman server.
+     * The intention is that client applications will use the expanded version command
+     * to check compatibility rather than interrogating the full list.
+     */
+    const { capabilities } = await cmd<WatchmanListCapabilitiesResponse>(
+      "list-capabilities"
+    );
+
+    if (capabilities.includes("field-content.sha1hex")) {
+      fields.push("content.sha1hex");
+    }
+  }
   /**
    * Based on the root that you provide, the watchman will watch the root and then
    * retrieves hash map value of root dir and relative dir
